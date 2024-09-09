@@ -1,14 +1,7 @@
 import numpy as np 
-import torch
+from torch import tensor, float
 TIME_PER_TICK = 20
 NUM_TICKS = 180
-
-LAYER_LENGTHS = [7,32,32,1]
-
-HIGH_MUTATION_RATE = 1
-MEDIUM_MUTATION_RATE = 0.5
-LOW_MUTATION_RATE = 0.25
-ULTRA_LOW_MUTATION_RATE = 0.1
 
 NORMAL_AVG_RATES = [TIME_PER_TICK/5,TIME_PER_TICK/5, TIME_PER_TICK/20, TIME_PER_TICK/20]
 MORE_PED_AVG_RATES = [TIME_PER_TICK/5,TIME_PER_TICK/5, TIME_PER_TICK/4, TIME_PER_TICK/4]
@@ -115,11 +108,11 @@ def testScenario(network, scenario):
         if sum(num_peds) != 0:
             ped0_ratio = num_peds[direction]/sum(num_peds)
             ped1_ratio = 1 - ped0_ratio
-        params = torch.tensor([[car0_ratio, car1_ratio, cars_passed/ (2*TIME_PER_TICK),
+        params = tensor([[car0_ratio, car1_ratio, cars_passed/ (2*TIME_PER_TICK),
                                 ped0_ratio, ped1_ratio,
-                                np.tanh(last_switch), np.tanh(second_last)]], dtype=torch.float)
+                                np.tanh(last_switch), np.tanh(second_last)]], dtype=float)
         switch = network.forward(params)
-        if switch > 0:
+        if switch[0][0] > switch[0][1]:
             if direction == 1:
                 direction = 0
             else:
@@ -214,4 +207,10 @@ def testFitness(network, scenarios):
     total_complaints = 0
     for scenario in scenarios:
         total_complaints += testScenario(network, scenario)
+    return total_complaints
+
+def testControlFitness(scenarios):
+    total_complaints = 0
+    for scenario in scenarios:
+        total_complaints += testScenarioWIthNormalTrafficLight(scenario)
     return total_complaints
