@@ -5,10 +5,10 @@ from evotorch.algorithms import GeneticAlgorithm
 from evotorch.operators import OnePointCrossOver, GaussianMutation
 from evotorch.logging import StdOutLogger
 
-LAYER_LENGTHS = [7,8,8,2]
-NUM_GENES = LAYER_LENGTHS[0]*LAYER_LENGTHS[1] + LAYER_LENGTHS[1] + LAYER_LENGTHS[1]*LAYER_LENGTHS[2] + LAYER_LENGTHS[2] + LAYER_LENGTHS[2]*LAYER_LENGTHS[3] + LAYER_LENGTHS[3]
+LAYER_LENGTHS = [7,8,2]
+NUM_GENES = LAYER_LENGTHS[0]*LAYER_LENGTHS[1] + LAYER_LENGTHS[1] + LAYER_LENGTHS[1]*LAYER_LENGTHS[2] + LAYER_LENGTHS[2]
 
-SCENARIOS = test_environment.makeTrainingSet(1,1,1,2)
+SCENARIOS = test_environment.makeTrainingSet(0,0,0,1)
 
 class MyNetwork (nn.Module):
     def __init__(self, values):
@@ -22,14 +22,10 @@ class MyNetwork (nn.Module):
         self.fc2.weight.data = values[2]
         self.fc2.bias.data = values[3]
 
-        self.fc3 = nn.Linear(LAYER_LENGTHS[2], LAYER_LENGTHS[3])
-        self.fc3.weight.data = values[4]
-        self.fc3.bias.data = values[5]
 
     def forward(self, x):
         x = nn.functional.leaky_relu(self.fc1(x), 0.1)
-        x = nn.functional.leaky_relu(self.fc2(x))
-        x = tanh(self.fc3(x))
+        x = tanh(self.fc2(x))
         return x
 
 def genoToPheno(gene_tensor : Tensor):
@@ -41,14 +37,8 @@ def genoToPheno(gene_tensor : Tensor):
                           (LAYER_LENGTHS[2], LAYER_LENGTHS[1]))
     bias2 = gene_tensor[LAYER_LENGTHS[0]*LAYER_LENGTHS[1] + LAYER_LENGTHS[1] + LAYER_LENGTHS[1]*LAYER_LENGTHS[2]:
                         LAYER_LENGTHS[0]*LAYER_LENGTHS[1] + LAYER_LENGTHS[1] + LAYER_LENGTHS[1]*LAYER_LENGTHS[2] + LAYER_LENGTHS[2]]
-    
-    weight3 = reshape(gene_tensor[LAYER_LENGTHS[0]*LAYER_LENGTHS[1] + LAYER_LENGTHS[1] + LAYER_LENGTHS[1]*LAYER_LENGTHS[2] + LAYER_LENGTHS[2]:
-                                        LAYER_LENGTHS[0]*LAYER_LENGTHS[1] + LAYER_LENGTHS[1] + LAYER_LENGTHS[1]*LAYER_LENGTHS[2] + LAYER_LENGTHS[2] + LAYER_LENGTHS[2]*LAYER_LENGTHS[3]], 
-                            (LAYER_LENGTHS[3], LAYER_LENGTHS[2]))
-    bias3 = gene_tensor[LAYER_LENGTHS[0]*LAYER_LENGTHS[1] + LAYER_LENGTHS[1] + LAYER_LENGTHS[1]*LAYER_LENGTHS[2] + LAYER_LENGTHS[2] + LAYER_LENGTHS[2]*LAYER_LENGTHS[3]:
-                        NUM_GENES]
         
-    return [weight1, bias1, weight2, bias2, weight3, bias3]
+    return [weight1, bias1, weight2, bias2]
 
 def fitnessFunc(genes):
     network = MyNetwork(genoToPheno(genes))
@@ -58,21 +48,23 @@ problem = Problem(
     "min",
     fitnessFunc,
     solution_length= NUM_GENES,
-    initial_bounds= (-3, 3)
+    initial_bounds= (-3, 3),
+    num_actors= 2
 )
 
 searcher = GeneticAlgorithm(
     problem,
-    popsize=100,
+    popsize=1500,
     operators=[
-        OnePointCrossOver(problem, tournament_size=4),
-        GaussianMutation(problem, stdev=0.1),
-    ],
+        OnePointCrossOver(problem, tournament_size= 300),
+        GaussianMutation(problem, stdev=5)
+    ]
 )
 CONTROL = test_environment.testControlFitness(SCENARIOS)
 _ = StdOutLogger(searcher)
 
 searcher.step()
 for i in range(1000):
+    SCENARIOS = test_environment.makeTrainingSet(0,0,0,1)
     print(CONTROL)
     searcher.step()
