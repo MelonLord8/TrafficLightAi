@@ -1,216 +1,120 @@
-import numpy as np 
-from torch import tensor, float
-TIME_PER_TICK = 20
-NUM_TICKS = 180
+import torch
+from copy import deepcopy
 
+
+TIME_PER_TICK = 20 #seconds
+NUM_TICKS = 30
+#Different rates that cars and pedestrains flow in each direction.
 NORMAL_AVG_RATES = [TIME_PER_TICK/5,TIME_PER_TICK/5, TIME_PER_TICK/20, TIME_PER_TICK/20]
 MORE_PED_AVG_RATES = [TIME_PER_TICK/5,TIME_PER_TICK/5, TIME_PER_TICK/4, TIME_PER_TICK/4]
-HIGHWAY_INTERSECTION_RATES = [TIME_PER_TICK/3, TIME_PER_TICK/3, TIME_PER_TICK/30, TIME_PER_TICK/30]
-BIASED_RATES = [TIME_PER_TICK/3,TIME_PER_TICK/6,TIME_PER_TICK/3,TIME_PER_TICK/6]
+HIGHWAY_INTERSECTION_RATES = [TIME_PER_TICK/2, TIME_PER_TICK/2, TIME_PER_TICK/30, TIME_PER_TICK/30]
+BIASED_RATES = [TIME_PER_TICK/2,TIME_PER_TICK/3,TIME_PER_TICK/3,TIME_PER_TICK/6]
 
 """
-Creates an array of length num_ticks + 1, 
-First element being the previous states of the traffic light 0 being one orientation and 1 being the other
-The rest being the number of incoming cars on the 0 lane, then 1 lane, then pedestrians in the same order.
+Creates an array of length num_ticks,
+Each element being a pair of matrices which represent the number of cars and pedestrians flowing in. 
 """
-def makeScenario(avg_rates, num_ticks = NUM_TICKS):
+def makeTrainingSet(num_norm, num_ped, num_highway, num_biased , num_ticks = NUM_TICKS):
     out = []
     for i in range(num_ticks):
-        tick = [[],[]]
-        tick[0].append(np.random.poisson(avg_rates[0]))
-        tick[0].append(np.random.poisson(avg_rates[0]))
-        tick[0].append(np.random.poisson(avg_rates[1]))
-        tick[0].append(np.random.poisson(avg_rates[1]))
-        tick[1].append(np.random.poisson(avg_rates[2]))
-        tick[1].append(np.random.poisson(avg_rates[3]))
-        out.append(tick)
-    return out
+      cars = torch.stack([torch.cat([torch.poisson(NORMAL_AVG_RATES[0]*torch.ones(2)), torch.poisson(NORMAL_AVG_RATES[1]*torch.ones(2))]) for j in range(num_norm)] +
+                         [torch.cat([torch.poisson(MORE_PED_AVG_RATES[0]*torch.ones(2)), torch.poisson(MORE_PED_AVG_RATES[1]*torch.ones(2))]) for j in range(num_ped)] +
+                         [torch.cat([torch.poisson(HIGHWAY_INTERSECTION_RATES[0]*torch.ones(2)), torch.poisson(HIGHWAY_INTERSECTION_RATES[1]*torch.ones(2))]) for j in range(num_highway)] +
+                         [torch.cat([torch.poisson(BIASED_RATES[0]*torch.ones(2)), torch.poisson(BIASED_RATES[1]*torch.ones(2))]) for j in range(num_biased)])
 
-def makeTrainingSet(num_norm, num_ped, num_highway, num_biased):
-    out = []
-    for i in range(num_norm):
-        out.append(makeScenario(NORMAL_AVG_RATES))
-    for i in range(num_ped):
-        out.append(makeScenario(MORE_PED_AVG_RATES))
-    for i in range(num_highway):
-        out.append(makeScenario(HIGHWAY_INTERSECTION_RATES))
-    for i in range(num_biased):
-        out.append(makeScenario(BIASED_RATES))
+      peds = torch.stack([torch.cat([torch.poisson(NORMAL_AVG_RATES[2]*torch.ones(1)), torch.poisson(NORMAL_AVG_RATES[3]*torch.ones(1))]) for j in range(num_norm)] +
+                         [torch.cat([torch.poisson(MORE_PED_AVG_RATES[2]*torch.ones(1)), torch.poisson(MORE_PED_AVG_RATES[3]*torch.ones(1))]) for j in range(num_ped)] +
+                         [torch.cat([torch.poisson(HIGHWAY_INTERSECTION_RATES[2]*torch.ones(1)), torch.poisson(HIGHWAY_INTERSECTION_RATES[3]*torch.ones(1))]) for j in range(num_highway)] +
+                         [torch.cat([torch.poisson(BIASED_RATES[2]*torch.ones(1)), torch.poisson(BIASED_RATES[3]*torch.ones(1))]) for j in range(num_biased)])
+      out.append([cars, peds])
     return out
 """
-Puts the neural network through each tick of the scenario generated 
-in each tick, cars and pedestrians are added to the end of their queue, then the program will check the direction of the intersection
-allowing some cars to pass, as they pass the time spent is put through a function to see how annoyed they are.
-All this data is then passed to the neural network, allowing it to decide wether or not to switch the direction.
-Then we move onto the next tick
+Puts the neural network through each tick of the scenario generated
+in each tick, cars and pedestrians are added to their respective matrices, then the program will check the direction of the intersection
+allowing some cars to pass.
+
+This utilises flipping the columns of a subtractor matrix depending on the direction decided upon.
+
+All the data about the current state is then formatted and passed to the neural network, allowing it to decide wether or not to switch the direction.
+Then we move onto the next tick, adding the total number of cars and pedestrains to the total complaints.
 Returns the "total complaints" made
 """
-def testScenario(network, scenario):
-    total_complaints = 0
-    last_switch = 0 #ticks since the last switch
-    second_last = 0 #ticks since the second last switch
 
-    cars = [[],[],[],[]]
-    num_cars = [0,0,0,0]
-    peds = [[],[]]
-    num_peds = [0,0]
-    direction = 0
-    num_ticks = 0
+def testFitnessOptmised(network, scenarios):
+  scenarios = deepcopy(scenarios)
+  num_complaints = 0
+  num_scenarios = scenarios[0][0].shape[0]
 
-    for tick in scenario:
-        for i in range(4):
-            cars[i].append([tick[0][i], num_ticks])
-            num_cars[i] += tick[0][i]
+  num_cars = torch.zeros(num_scenarios, 4)
+  num_peds = torch.zeros(num_scenarios, 2)
 
-        for i in range(2):
-            peds[i].append((tick[1][i], num_ticks))
-            num_cars[i] += tick[1][i]
+  subtractors = torch.transpose(torch.stack([TIME_PER_TICK * torch.ones(num_scenarios),
+                                             TIME_PER_TICK * torch.ones(num_scenarios),
+                                             torch.zeros(num_scenarios),
+                                             torch.zeros(num_scenarios)]), 0, 1)
+  last_switch = torch.zeros(num_scenarios)
 
-        cars_passed = 0
-        car_passed_0 = 0
-        car_passed_1 = 0
+  for tick in scenarios:
+    num_cars += tick[0]
+    num_peds += tick[1]
 
-        while cars[2*direction] and car_passed_0 < TIME_PER_TICK:
-                cur_group = cars[2*direction][0]
-                if cur_group[0] <= TIME_PER_TICK - car_passed_0:
-                    total_complaints += cur_group[0]*(num_ticks - cur_group[1])
-                    car_passed_0 += cur_group[0]
-                    cars[2*direction].pop(0)
-                else:
-                    cars_passing = TIME_PER_TICK - car_passed_0
-                    total_complaints += (cars_passing)*(num_ticks - cur_group[1])
-                    car_passed_0 += cars_passing
-                    cars[2*direction][0][0] -= cars_passing
+    dir0_indices = torch.nonzero(torch.transpose(subtractors, 0, 1)[0])
+    dir1_indices = torch.nonzero(torch.transpose(subtractors, 0, 1)[2])
 
-        while cars[2*direction + 1] and car_passed_1 < TIME_PER_TICK:
-                cur_group = cars[2*direction + 1][0]
-                if cur_group[0] <= TIME_PER_TICK - car_passed_1:
-                    total_complaints += cur_group[0]*(num_ticks - cur_group[1])
-                    car_passed_1 += cur_group[0]
-                    cars[2*direction + 1].pop(0)
-                else:
-                    cars_passing = TIME_PER_TICK - car_passed_1
-                    total_complaints += (TIME_PER_TICK - car_passed_1)*(num_ticks - cur_group[1])
-                    car_passed_1 += cars_passing
-                    cars[2*direction + 1][0][0] -= cars_passing
-        cars_passed += car_passed_0 + car_passed_1
-        for ped_group in peds[direction]:
-            total_complaints += 0.75*ped_group[0] * (num_ticks - ped_group[1])
-        peds[direction] = []
-        num_peds[direction] = 0
-        car0_ratio = 0
-        car1_ratio = 0
-        if sum(num_cars) != 0:
-            car0_ratio = (num_cars[2*direction] + num_cars[2*direction + 1]) / sum(num_cars)
-            car1_ratio = 1 - car0_ratio
-        ped0_ratio = 0 #not what you think
-        ped1_ratio = 0
-        if sum(num_peds) != 0:
-            ped0_ratio = num_peds[direction]/sum(num_peds)
-            ped1_ratio = 1 - ped0_ratio
-        params = tensor([[car0_ratio, car1_ratio, cars_passed/ (2*TIME_PER_TICK),
-                                ped0_ratio, ped1_ratio,
-                                np.tanh(last_switch), np.tanh(second_last)]], dtype=float)
-        switch = network.forward(params)
-        if switch[0][0] > switch[0][1]:
-            if direction == 1:
-                direction = 0
-            else:
-                direction = 1
-            
-            second_last = last_switch
-            last_switch = 0
-        last_switch += 1
-        num_ticks += 1
-    for i in range(4):
-        if num_cars[i] > 0:
-            for car_group in cars[i]:
-                total_complaints += 1.5*car_group[0]*(num_ticks - car_group[1])
-    for i in range(2):
-        if num_peds[i] > 0:
-            for ped_group in peds[i]:
-                total_complaints += ped_group[0]*(num_ticks - ped_group[1])
-    return total_complaints
+    next_num_cars = torch.relu(num_cars - subtractors)
+    cars_passed = torch.sum(num_cars - next_num_cars, 1)/TIME_PER_TICK
+    num_cars = next_num_cars
+    num_peds[dir0_indices, 0] = 0
+    num_peds[dir1_indices, 1] = 0
 
+    #handle getting the parameters, feeding it forward, and then flipping the subtractors
 
-def testScenarioWIthNormalTrafficLight(scenario):
-    total_complaints = 0
-    last_switch = 0 #ticks since the last switch
-    second_last = 0 #ticks since the second last switch
+    car_ratio = torch.clone(num_cars)
+    car_ratio[dir1_indices, 0] = 0
+    car_ratio[dir1_indices, 1] = 0
+    car_ratio[dir0_indices, 2] = 0
+    car_ratio[dir0_indices, 3] = 0
+    car_ratio = torch.clamp(torch.div(torch.sum(car_ratio, (1)), torch.sum(num_cars, (1)) + 0.1), min = 0, max = 1)
 
-    cars = [[],[],[],[]]
-    num_cars = [0,0,0,0]
-    peds = [[],[]]
-    num_peds = [0,0]
-    direction = 0
-    num_ticks = 0
+    other_ped = torch.tanh(torch.sum(num_peds, (1)))
 
-    for tick in scenario:
-        for i in range(4):
-            cars[i].append([tick[0][i], num_ticks])
-            num_cars[i] += tick[0][i]
+    params = torch.transpose(torch.stack([car_ratio, other_ped, cars_passed, torch.tanh(last_switch)]), 0, 1)
+    network_out = torch.squeeze(network(params))
+    switch_indices = torch.squeeze(torch.nonzero(torch.relu(network_out)))
 
-        for i in range(2):
-            peds[i].append((tick[1][i], num_ticks))
-            num_cars[i] += tick[1][i]
+    subtractors[switch_indices] = torch.flip(subtractors[switch_indices], [-1])
 
-        cars_passed = 0
-        car_passed_0 = 0
-        car_passed_1 = 0
-
-        while cars[2*direction] and car_passed_0 < TIME_PER_TICK:
-                cur_group = cars[2*direction][0]
-                if cur_group[0] <= TIME_PER_TICK - car_passed_0:
-                    total_complaints += cur_group[0]*(num_ticks - cur_group[1])
-                    car_passed_0 += cur_group[0]
-                    cars[2*direction].pop(0)
-                else:
-                    cars_passing = TIME_PER_TICK - car_passed_0
-                    total_complaints += (cars_passing)*(num_ticks - cur_group[1])
-                    car_passed_0 += cars_passing
-                    cars[2*direction][0][0] -= cars_passing
-
-        while cars[2*direction + 1] and car_passed_1 < TIME_PER_TICK:
-                cur_group = cars[2*direction + 1][0]
-                if cur_group[0] <= TIME_PER_TICK - car_passed_1:
-                    total_complaints += cur_group[0]*(num_ticks - cur_group[1])
-                    car_passed_1 += cur_group[0]
-                    cars[2*direction + 1].pop(0)
-                else:
-                    cars_passing = TIME_PER_TICK - car_passed_1
-                    total_complaints += (TIME_PER_TICK - car_passed_1)*(num_ticks - cur_group[1])
-                    car_passed_1 += cars_passing
-                    cars[2*direction + 1][0][0] -= cars_passing
-        cars_passed += car_passed_0 + car_passed_1
-        for ped_group in peds[direction]:
-            total_complaints += 0.75*ped_group[0] * (num_ticks - ped_group[1])
-        peds[direction] = []
-        num_peds[direction] = 0
-        if direction == 1:
-            direction = 0
-        else:
-            direction = 1
-        num_ticks += 1
-    for i in range(4):
-        if num_cars[i] > 0:
-            for car_group in cars[i]:
-                total_complaints += 1.5*car_group[0]*(num_ticks - car_group[1])
-    for i in range(2):
-        if num_peds[i] > 0:
-            for ped_group in peds[i]:
-                total_complaints += ped_group[0]*(num_ticks - ped_group[1])
-    return total_complaints
-"""
-Puts the network through an multiple scenarios, and gathers the complaints. 
-"""
-def testFitness(network, scenarios):
-    total_complaints = 0
-    for scenario in scenarios:
-        total_complaints += testScenario(network, scenario)
-    return total_complaints
+    last_switch[switch_indices] = 0
+    num_complaints += (torch.sum(num_cars) + 0.75*torch.sum(num_peds)).item()
+    last_switch += 1
+  return num_complaints
 
 def testControlFitness(scenarios):
-    total_complaints = 0
-    for scenario in scenarios:
-        total_complaints += testScenarioWIthNormalTrafficLight(scenario)
-    return total_complaints
+  num_complaints = 0
+  num_scenarios = scenarios[0][0].shape[0]
+
+  num_cars = torch.zeros(num_scenarios, 4)
+  num_peds = torch.zeros(num_scenarios, 2)
+
+  subtractors = torch.transpose(torch.stack([TIME_PER_TICK * torch.ones(num_scenarios),
+                                             TIME_PER_TICK * torch.ones(num_scenarios),
+                                             torch.zeros(num_scenarios),
+                                             torch.zeros(num_scenarios)]), 0, 1)
+  for tick in scenarios:
+    num_cars += tick[0]
+    num_peds += tick[1]
+
+    dir0_indices = torch.nonzero(torch.transpose(subtractors, 0, 1)[0])
+    dir1_indices = torch.nonzero(torch.transpose(subtractors, 0, 1)[2])
+
+    num_cars = torch.relu(num_cars - subtractors)
+
+    num_peds[dir0_indices, 0] = 0
+    num_peds[dir1_indices, 1] = 0
+
+    #handle getting the parameters, feeding it forward, and then flipping the subtractors
+
+    subtractors = torch.flip(subtractors,[1])
+
+    num_complaints += (torch.sum(num_cars) + 0.75*torch.sum(num_peds)).item()
+  return num_complaints
