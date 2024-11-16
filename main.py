@@ -54,6 +54,7 @@ def next_gen(parents, new_gen, rate_num_arr):
   for i in range(len(parents)//2):
     add_mutated_children(parents[2*i][2], parents[2*i + 1][2], new_gen, rate_num_arr)
     new_gen.extend([deepcopy(parents[2*i][2]), deepcopy(parents[2*i + 1][2])])
+  random.shuffle(new_gen)
 
 def analyse(performance, control):
   print("Mean: " , np.mean(performance))

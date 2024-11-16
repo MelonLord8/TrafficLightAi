@@ -1,6 +1,6 @@
 import torch
 from copy import deepcopy
-
+from math import log
 
 TIME_PER_TICK = 20 #seconds
 NUM_TICKS = 30
@@ -85,8 +85,18 @@ def testFitnessOptmised(network, scenarios):
     subtractors[switch_indices] = torch.flip(subtractors[switch_indices], [-1])
 
     last_switch[switch_indices] = 0
-    num_complaints += (torch.sum(num_cars) + 0.75*torch.sum(num_peds)).item()
     last_switch += 1
+
+    dir0_indices = torch.nonzero(torch.transpose(subtractors, 0, 1)[0])
+    dir1_indices = torch.nonzero(torch.transpose(subtractors, 0, 1)[2])
+
+    time_weight = torch.clone(num_cars)
+    time_weight[dir1_indices, 2] = 0
+    time_weight[dir1_indices, 3] = 0
+    time_weight[dir0_indices, 0] = 0
+    time_weight[dir0_indices, 1] = 0
+    num_complaints += (torch.sum(num_cars) + 0.75*torch.sum(num_peds) + torch.dot(torch.sum(time_weight, (1)), torch.exp(log(1.125)*last_switch) - 1)).item()
+
   return num_complaints
 
 def testControlFitness(scenarios):
@@ -116,5 +126,13 @@ def testControlFitness(scenarios):
 
     subtractors = torch.flip(subtractors,[1])
 
-    num_complaints += (torch.sum(num_cars) + 0.75*torch.sum(num_peds)).item()
+    dir0_indices = torch.nonzero(torch.transpose(subtractors, 0, 1)[0])
+    dir1_indices = torch.nonzero(torch.transpose(subtractors, 0, 1)[2])
+
+    time_weight = torch.clone(num_cars)
+    time_weight[dir1_indices, 2] = 0
+    time_weight[dir1_indices, 3] = 0
+    time_weight[dir0_indices, 0] = 0
+    time_weight[dir0_indices, 1] = 0
+    num_complaints += (torch.sum(num_cars) + 0.75*torch.sum(num_peds) + torch.sum(time_weight*0.125)).item()
   return num_complaints
