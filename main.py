@@ -7,7 +7,7 @@ import heapq
 
 LAYER_LENGTHS = [4,8,8,1]
 
-MUTATION_RATES = [-1.5,-0.75,-0.2,0.05,0.1]
+MUTATION_RATES = torch.Tensor([-1.5,-0.75,-0.2,0.05,0.1])
 
 NUM_GENERATIONS = 1000
 POP_SIZE = 1000
@@ -55,15 +55,20 @@ def next_gen(parents, new_gen):
   random.shuffle(new_gen)
 
 def new_mutations(rate_num_array):
-  return [np.percentile(rate_num_array, 100*(i+1)/(len(rate_num_array) + 1)) for i in range(len(rate_num_array))]
+  rate_num_array.extend(MUTATION_RATES.tolist()*(len(rate_num_array)//4 + 1))
+  out = torch.tensor([np.percentile(rate_num_array, 100*(i+1)/(MUTATION_RATES.numel() + 1)) for i in range(MUTATION_RATES.numel())])
+  out += (out[MUTATION_RATES.numel()//2 + 1] - out.mean()).item()*(torch.rand_like(out)-1)
+  out += (out - out.mean().item())*torch.ones_like(out)
+  print(out)
+  return out
 
 def analyse(performance, control):
   print("Mean: " , np.mean(performance))
   print("Standard deviation: " , np.std(performance))
   print("Range: " , (np.max(performance) - np.min(performance)))
-  print("Mean of mutation rates: " , np.mean(MUTATION_RATES))
-  print("Standard deviation of mutation rates: " , np.std(MUTATION_RATES))
-  print("Range of mutation rates: " , (np.max(MUTATION_RATES) - np.min(MUTATION_RATES)))
+  print("Mean of mutation rates: " , MUTATION_RATES.mean().item())
+  print("Standard deviation of mutation rates: " , MUTATION_RATES.std().item())
+  print("Range of mutation rates: " , (MUTATION_RATES.max() - MUTATION_RATES.min()).item())
   print("Best performance: " , np.min(performance))
   print("Control performance: " , control)
   print("Median Relative Performance: ", (np.floor(np.median(performance) * 100 / control)) , "%")
@@ -77,10 +82,11 @@ def networks_equal(n1, n2):
   return True
 
 def train():
+  global MUTATION_RATES
   generation = []
   gen_num = 0
   for i in range(POP_SIZE):
-    generation.append([init_network(), MUTATION_RATES[POP_SIZE%len(MUTATION_RATES)] ] )
+    generation.append([init_network(), MUTATION_RATES[POP_SIZE%MUTATION_RATES.numel()].item() ] )
   SCENARIOS = test_environment.makeTrainingSet(4,4,4,4)
   CONTROL = test_environment.testControlFitness(SCENARIOS)
   with torch.no_grad():
@@ -96,9 +102,10 @@ def train():
           mutation_num = []
           for i in range(POP_SIZE):
             mutation_num.append(generation[i][1])
-          mutation_rates = new_mutations(mutation_num)
+          print(mutation_num)
+          MUTATION_RATES = new_mutations(mutation_num)
           for i in range(POP_SIZE):
-            generation[i][1] = mutation_rates[POP_SIZE%len(mutation_rates)]
+            generation[i][1] = MUTATION_RATES[POP_SIZE%len(MUTATION_RATES)].item()
 
         for i in range(POP_SIZE):
           network = generation[i][0]
